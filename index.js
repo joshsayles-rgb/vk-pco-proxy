@@ -44,15 +44,49 @@ function pcoFetch(path) {
 
 // Paginate all check-ins for a period and count by location
 async function countsByPeriod(periodId) {
+  // Use headcounts endpoint via location_event_times for accurate per-period counts
+  const letRes = await pcoFetch('/check-ins/v2/event_periods/' + periodId + '/location_event_times?per_page=100&include=location,headcounts');
+  console.log('location_event_times status:', letRes.status, 'for period:', periodId);
+
+  if (letRes.status === 200 && letRes.data.data && letRes.data.data.length > 0) {
+    // Build location map from included
+    const locMap = {};
+    for (const inc of (letRes.data.included || [])) {
+      if (inc.type === 'Location') locMap[inc.id] = inc.attributes.name;
+      if (inc.type === 'Headcount') {
+        const locId = inc.relationships?.location?.data?.id;
+        const room = LOC[locId];
+        if (room) {
+          locMap['count_' + room] = (locMap['count_' + room] || 0) + (inc.attributes.total || 0);
+        }
+      }
+    }
+    const total = Object.keys(locMap)
+      .filter(k => k.startsWith('count_'))
+      .reduce((s, k) => s + locMap[k], 0);
+    return {
+      total,
+      rooms: CLASS_ORDER.map(name => ({ name, count: locMap['count_' + name] || 0 })),
+    };
+  }
+
+  // Fallback: paginate check_ins filtered by event_period
   let all = [];
-  let path = '/check-ins/v2/check_ins?where[event_period_id]=' + periodId + '&include=locations&per_page=100';
+  let path = '/check-ins/v2/check_ins?filter[event_period_id]=' + periodId + '&include=locations&per_page=100';
   let pages = 0;
 
-  while (path && pages < 20) {
+  while (path && pages < 30) {
     pages++;
     const res = await pcoFetch(path);
     if (res.status !== 200) break;
-    all = all.concat(res.data.data || []);
+    const pageData = res.data.data || [];
+    // Verify these belong to our period
+    const filtered = pageData.filter(ci =>
+      ci.relationships?.event_period?.data?.id === periodId
+    );
+    all = all.concat(filtered);
+    // If PCO isn't filtering, stop after first page mismatch
+    if (pageData.length > 0 && filtered.length === 0) break;
     const nextUrl = res.data.links?.next || null;
     path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
   }
@@ -65,6 +99,7 @@ async function countsByPeriod(periodId) {
     counts[room] = (counts[room] || 0) + 1;
   }
 
+  console.log('Fallback period', periodId, 'total:', all.length);
   return {
     total: all.length,
     rooms: CLASS_ORDER.map(name => ({ name, count: counts[name] || 0 })),
@@ -82,10 +117,15 @@ async function getCheckInCounts(eventId) {
   const todayStr = now.toISOString().split('T')[0];
   const allPeriods = periodsRes.data.data || [];
 
+  console.log('Today str:', todayStr);
+  console.log('All periods:', allPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })));
+
   // Get today's periods sorted by start time
   const todayPeriods = allPeriods
     .filter(p => p.attributes.starts_at.split('T')[0] === todayStr)
     .sort((a, b) => new Date(a.attributes.starts_at) - new Date(b.attributes.starts_at));
+
+  console.log('Today periods:', todayPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })));
 
   if (todayPeriods.length === 0) {
     // Fall back to most recent past periods (last Sunday)
