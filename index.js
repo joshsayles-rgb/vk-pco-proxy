@@ -20,7 +20,7 @@ const LOC = {
   '909667':  '4th-6th Grade',
 };
 const CLASS_ORDER = ['Nursery','Toddler/Wobbler','Preschool','Kindergarten - 1st Grade','2nd-3rd Grade','4th-6th Grade'];
-
+ 
 function pcoFetch(path) {
   return new Promise((resolve, reject) => {
     const options = {
@@ -130,18 +130,25 @@ async function getCheckInCounts(eventId) {
  
   if (todayPeriods.length === 0) {
     // Fall back to most recent past periods (last Sunday)
+    // Get the most recent Sunday's periods
     const pastPeriods = allPeriods
       .filter(p => new Date(p.attributes.starts_at) < now)
-      .sort((a, b) => new Date(b.attributes.starts_at) - new Date(a.attributes.starts_at))
-      .slice(0, 2)
+      .sort((a, b) => new Date(b.attributes.starts_at) - new Date(a.attributes.starts_at));
+ 
+    // Find the most recent date and get all periods from that date
+    const mostRecentDate = pastPeriods[0]?.attributes.starts_at.split('T')[0];
+    console.log('Most recent period date:', mostRecentDate);
+    const recentPeriods = pastPeriods
+      .filter(p => p.attributes.starts_at.split('T')[0] === mostRecentDate)
       .sort((a, b) => new Date(a.attributes.starts_at) - new Date(b.attributes.starts_at));
  
-    if (pastPeriods.length === 0) return null;
+    if (recentPeriods.length === 0) return null;
+    console.log('Using periods from:', mostRecentDate, 'count:', recentPeriods.length);
  
-    const results = await Promise.all(pastPeriods.map(p => countsByPeriod(p.id)));
+    const results = await Promise.all(recentPeriods.slice(0, 2).map(p => countsByPeriod(p.id)));
     return {
       isToday: false,
-      date: pastPeriods[0].attributes.starts_at.split('T')[0],
+      date: mostRecentDate,
       service1: results[0] || null,
       service2: results[1] || null,
     };
