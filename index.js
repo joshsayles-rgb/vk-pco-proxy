@@ -41,13 +41,13 @@ function pcoFetch(path) {
     req.end();
   });
 }
-
+ 
 // Paginate all check-ins for a period and count by location
 async function countsByPeriod(periodId) {
   // Use headcounts endpoint via location_event_times for accurate per-period counts
   const letRes = await pcoFetch('/check-ins/v2/event_periods/' + periodId + '/location_event_times?per_page=100&include=location,headcounts');
   console.log('location_event_times status:', letRes.status, 'for period:', periodId);
-
+ 
   if (letRes.status === 200 && letRes.data.data && letRes.data.data.length > 0) {
     // Build location map from included
     const locMap = {};
@@ -69,12 +69,12 @@ async function countsByPeriod(periodId) {
       rooms: CLASS_ORDER.map(name => ({ name, count: locMap['count_' + name] || 0 })),
     };
   }
-
+ 
   // Fallback: paginate check_ins filtered by event_period
   let all = [];
   let path = '/check-ins/v2/check_ins?filter[event_period_id]=' + periodId + '&include=locations&per_page=100';
   let pages = 0;
-
+ 
   while (path && pages < 30) {
     pages++;
     const res = await pcoFetch(path);
@@ -90,7 +90,7 @@ async function countsByPeriod(periodId) {
     const nextUrl = res.data.links?.next || null;
     path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
   }
-
+ 
   const counts = {};
   for (const ci of all) {
     const locId = ci.relationships?.locations?.data?.[0]?.id;
@@ -98,35 +98,36 @@ async function countsByPeriod(periodId) {
     if (!room) continue;
     counts[room] = (counts[room] || 0) + 1;
   }
-
+ 
   console.log('Fallback period', periodId, 'total:', all.length);
   return {
     total: all.length,
     rooms: CLASS_ORDER.map(name => ({ name, count: counts[name] || 0 })),
   };
 }
-
+ 
 // Get today's check-in counts split by 1st and 2nd service
 async function getCheckInCounts(eventId) {
   const periodsRes = await pcoFetch(
-    '/check-ins/v2/events/' + eventId + '/event_periods?order=-starts_at&per_page=10'
+    '/check-ins/v2/events/' + eventId + '/event_periods?order=-starts_at&per_page=25'
   );
   if (periodsRes.status !== 200) throw new Error('Periods error: ' + periodsRes.status);
-
+ 
   const now = new Date();
   const todayStr = now.toISOString().split('T')[0];
   const allPeriods = periodsRes.data.data || [];
-
-  console.log('Today str:', todayStr);
-  console.log('All periods:', allPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })));
-
+ 
+  console.log('Today str:', todayStr, 'Now UTC:', now.toISOString());
+  console.log('All periods count:', allPeriods.length);
+  console.log('All periods:', JSON.stringify(allPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at }))));
+ 
   // Get today's periods sorted by start time
   const todayPeriods = allPeriods
     .filter(p => p.attributes.starts_at.split('T')[0] === todayStr)
     .sort((a, b) => new Date(a.attributes.starts_at) - new Date(b.attributes.starts_at));
-
+ 
   console.log('Today periods:', todayPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })));
-
+ 
   if (todayPeriods.length === 0) {
     // Fall back to most recent past periods (last Sunday)
     const pastPeriods = allPeriods
@@ -134,9 +135,9 @@ async function getCheckInCounts(eventId) {
       .sort((a, b) => new Date(b.attributes.starts_at) - new Date(a.attributes.starts_at))
       .slice(0, 2)
       .sort((a, b) => new Date(a.attributes.starts_at) - new Date(b.attributes.starts_at));
-
+ 
     if (pastPeriods.length === 0) return null;
-
+ 
     const results = await Promise.all(pastPeriods.map(p => countsByPeriod(p.id)));
     return {
       isToday: false,
@@ -145,7 +146,7 @@ async function getCheckInCounts(eventId) {
       service2: results[1] || null,
     };
   }
-
+ 
   // Today's periods
   const results = await Promise.all(todayPeriods.slice(0, 2).map(p => countsByPeriod(p.id)));
   return {
@@ -159,22 +160,22 @@ async function getCheckInCounts(eventId) {
     })),
   };
 }
-
+ 
 const server = http.createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Cache-Control', 'no-store');
-
+ 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   if (req.method !== 'GET')     { res.writeHead(405); res.end(JSON.stringify({ error: 'Method not allowed' })); return; }
-
+ 
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
     return;
   }
-
+ 
   // /checkins/:eventId — split by service
   const checkinMatch = req.url.match(/^\/checkins\/(\d+)$/);
   if (checkinMatch) {
@@ -189,11 +190,11 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
-
+ 
   // Default: forward to PCO
   const result = await pcoFetch(req.url).catch(err => ({ status: 500, data: { error: err.message } }));
   res.writeHead(result.status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(result.data));
 });
-
+ 
 server.listen(PORT, () => console.log('PCO proxy on port ' + PORT));
