@@ -7,7 +7,7 @@ const PORT       = process.env.PORT || 3000;
 
 const auth = 'Basic ' + Buffer.from(PCO_APP_ID + ':' + PCO_SECRET).toString('base64');
 
-console.log('PCO_APP_ID length:', PCO_APP_ID.length);
+console.log('PCO_APP_ID length:', PCO_APP_ID.length, 'v2');
 console.log('PCO_SECRET length:', PCO_SECRET.length);
 
 // Location ID -> room name
