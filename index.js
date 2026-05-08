@@ -54,21 +54,44 @@ function isFirstService(createdAt) {
   return h < SERVICE_CUTOFF_HOUR || (h === SERVICE_CUTOFF_HOUR && m < SERVICE_CUTOFF_MIN);
 }
  
-async function fetchAllForPeriod(periodId) {
+async function fetchAllForPeriod(periodId, periodDate) {
+  // Get the period date bounds in UTC
+  const dayStart = new Date(periodDate + 'T00:00:00Z');
+  const dayEnd   = new Date(periodDate + 'T23:59:59Z');
+ 
   let all = [];
   let path = '/check-ins/v2/check_ins?where[event_period_id]=' + periodId + '&include=locations&per_page=100';
   let pages = 0;
+  let hadMismatch = false;
  
   while (path && pages < 30) {
     pages++;
     const res = await pcoFetch(path);
     if (res.status !== 200) break;
     const pageData = res.data.data || [];
-    all = all.concat(pageData);
+ 
+    // Filter to only check-ins created on the period's date
+    const filtered = pageData.filter(ci => {
+      const created = new Date(ci.attributes.created_at);
+      return created >= dayStart && created <= dayEnd;
+    });
+ 
+    all = all.concat(filtered);
+ 
+    // If we're getting check-ins from wrong dates, stop paginating
+    const wrongDate = pageData.filter(ci => {
+      const created = new Date(ci.attributes.created_at);
+      return created < dayStart;
+    });
+    if (wrongDate.length > pageData.length / 2) {
+      console.log('Stopping pagination - hitting old check-ins');
+      break;
+    }
+ 
     const nextUrl = res.data.links?.next || null;
     path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
   }
-  console.log('Period', periodId, 'total fetched:', all.length);
+  console.log('Period', periodId, 'date', periodDate, 'filtered total:', all.length, 'pages:', pages);
   return all;
 }
  
@@ -127,7 +150,7 @@ async function getCheckInCounts(eventId) {
  
     // Split by time cutoff
     const period = recentPeriods[0];
-    const allCI = await fetchAllForPeriod(period.id);
+    const allCI = await fetchAllForPeriod(period.id, mostRecentDate);
     const first  = allCI.filter(ci => isFirstService(ci.attributes.created_at));
     const second = allCI.filter(ci => !isFirstService(ci.attributes.created_at));
     console.log('Fallback: 1st service:', first.length, '2nd service:', second.length);
@@ -141,7 +164,7 @@ async function getCheckInCounts(eventId) {
  
   // Today's periods - split by time
   const period = todayPeriods[0];
-  const allCI = await fetchAllForPeriod(period.id);
+  const allCI = await fetchAllForPeriod(period.id, todayStr);
   const first  = allCI.filter(ci => isFirstService(ci.attributes.created_at));
   const second = allCI.filter(ci => !isFirstService(ci.attributes.created_at));
   console.log('Today: 1st service:', first.length, '2nd service:', second.length);
