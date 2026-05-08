@@ -183,6 +183,20 @@ const server = http.createServer(async (req, res) => {
     return;
   }
  
+  // Debug event times
+  const timesMatch = req.url.match(/^\/times\/(\d+)$/);
+  if (timesMatch) {
+    try {
+      const eventId = timesMatch[1];
+      const r = await pcoFetch('/check-ins/v2/events/' + eventId + '/event_times?per_page=10&order=-starts_at');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: r.status, data: r.data }));
+    } catch(err) {
+      res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+ 
   // /checkins/:eventId — split by service
   const checkinMatch = req.url.match(/^\/checkins\/(\d+)$/);
   if (checkinMatch) {
