@@ -21,7 +21,6 @@ const LOC = {
 };
 const CLASS_ORDER = ['Nursery','Toddler/Wobbler','Preschool','Kindergarten - 1st Grade','2nd-3rd Grade','4th-6th Grade'];
  
-
 function pcoFetch(path) {
   return new Promise((resolve, reject) => {
     const options = {
@@ -44,36 +43,20 @@ function pcoFetch(path) {
 }
  
 // Paginate all check-ins for a period and count by location
-async function countsByPeriod(periodId) {
-  // Use headcounts endpoint via location_event_times for accurate per-period counts
-  const letRes = await pcoFetch('/check-ins/v2/event_periods/' + periodId + '/location_event_times?per_page=100&include=location,headcounts');
-  console.log('location_event_times status:', letRes.status, 'for period:', periodId);
+// Split cutoff: 10:35 AM Pacific = 17:35 UTC
+const SERVICE_CUTOFF_HOUR = 17;
+const SERVICE_CUTOFF_MIN  = 35;
  
-  if (letRes.status === 200 && letRes.data.data && letRes.data.data.length > 0) {
-    // Build location map from included
-    const locMap = {};
-    for (const inc of (letRes.data.included || [])) {
-      if (inc.type === 'Location') locMap[inc.id] = inc.attributes.name;
-      if (inc.type === 'Headcount') {
-        const locId = inc.relationships?.location?.data?.id;
-        const room = LOC[locId];
-        if (room) {
-          locMap['count_' + room] = (locMap['count_' + room] || 0) + (inc.attributes.total || 0);
-        }
-      }
-    }
-    const total = Object.keys(locMap)
-      .filter(k => k.startsWith('count_'))
-      .reduce((s, k) => s + locMap[k], 0);
-    return {
-      total,
-      rooms: CLASS_ORDER.map(name => ({ name, count: locMap['count_' + name] || 0 })),
-    };
-  }
+function isFirstService(createdAt) {
+  const d = new Date(createdAt);
+  const h = d.getUTCHours();
+  const m = d.getUTCMinutes();
+  return h < SERVICE_CUTOFF_HOUR || (h === SERVICE_CUTOFF_HOUR && m < SERVICE_CUTOFF_MIN);
+}
  
-  // Fallback: paginate check_ins filtered by event_period
+async function fetchAllForPeriod(periodId) {
   let all = [];
-  let path = '/check-ins/v2/check_ins?filter[event_period_id]=' + periodId + '&include=locations&per_page=100';
+  let path = '/check-ins/v2/check_ins?where[event_period_id]=' + periodId + '&include=locations&per_page=100';
   let pages = 0;
  
   while (path && pages < 30) {
@@ -81,28 +64,24 @@ async function countsByPeriod(periodId) {
     const res = await pcoFetch(path);
     if (res.status !== 200) break;
     const pageData = res.data.data || [];
-    // Verify these belong to our period
-    const filtered = pageData.filter(ci =>
-      ci.relationships?.event_period?.data?.id === periodId
-    );
-    all = all.concat(filtered);
-    // If PCO isn't filtering, stop after first page mismatch
-    if (pageData.length > 0 && filtered.length === 0) break;
+    all = all.concat(pageData);
     const nextUrl = res.data.links?.next || null;
     path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
   }
+  console.log('Period', periodId, 'total fetched:', all.length);
+  return all;
+}
  
+function toCounts(checkIns) {
   const counts = {};
-  for (const ci of all) {
+  for (const ci of checkIns) {
     const locId = ci.relationships?.locations?.data?.[0]?.id;
     const room = LOC[locId];
     if (!room) continue;
     counts[room] = (counts[room] || 0) + 1;
   }
- 
-  console.log('Fallback period', periodId, 'total:', all.length);
   return {
-    total: all.length,
+    total: checkIns.length,
     rooms: CLASS_ORDER.map(name => ({ name, count: counts[name] || 0 })),
   };
 }
@@ -146,26 +125,32 @@ async function getCheckInCounts(eventId) {
     if (recentPeriods.length === 0) return null;
     console.log('Using periods from:', mostRecentDate, 'count:', recentPeriods.length);
  
-    const results = await Promise.all(recentPeriods.slice(0, 2).map(p => countsByPeriod(p.id)));
+    // Split by time cutoff
+    const period = recentPeriods[0];
+    const allCI = await fetchAllForPeriod(period.id);
+    const first  = allCI.filter(ci => isFirstService(ci.attributes.created_at));
+    const second = allCI.filter(ci => !isFirstService(ci.attributes.created_at));
+    console.log('Fallback: 1st service:', first.length, '2nd service:', second.length);
     return {
       isToday: false,
       date: mostRecentDate,
-      service1: results[0] || null,
-      service2: results[1] || null,
+      service1: toCounts(first),
+      service2: second.length > 0 ? toCounts(second) : null,
     };
   }
  
-  // Today's periods
-  const results = await Promise.all(todayPeriods.slice(0, 2).map(p => countsByPeriod(p.id)));
+  // Today's periods - split by time
+  const period = todayPeriods[0];
+  const allCI = await fetchAllForPeriod(period.id);
+  const first  = allCI.filter(ci => isFirstService(ci.attributes.created_at));
+  const second = allCI.filter(ci => !isFirstService(ci.attributes.created_at));
+  console.log('Today: 1st service:', first.length, '2nd service:', second.length);
   return {
     isToday: true,
     date: todayStr,
-    service1: results[0] || null,
-    service2: results[1] || null,
-    periods: todayPeriods.map(p => ({
-      id: p.id,
-      starts_at: p.attributes.starts_at,
-    })),
+    service1: toCounts(first),
+    service2: second.length > 0 ? toCounts(second) : null,
+    periods: todayPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })),
   };
 }
  
