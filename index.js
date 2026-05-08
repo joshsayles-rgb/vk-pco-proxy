@@ -92,6 +92,12 @@ async function fetchAllForPeriod(periodId, periodDate) {
     path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
   }
   console.log('Period', periodId, 'date', periodDate, 'filtered total:', all.length, 'pages:', pages);
+  if (all.length > 0) {
+    const times = all.map(ci => ci.attributes.created_at).sort();
+    console.log('First check-in:', times[0]);
+    console.log('Last check-in:', times[times.length - 1]);
+    console.log('Middle check-in:', times[Math.floor(times.length / 2)]);
+  }
   return all;
 }
  
