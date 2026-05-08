@@ -21,6 +21,7 @@ const LOC = {
 };
 const CLASS_ORDER = ['Nursery','Toddler/Wobbler','Preschool','Kindergarten - 1st Grade','2nd-3rd Grade','4th-6th Grade'];
  
+
 function pcoFetch(path) {
   return new Promise((resolve, reject) => {
     const options = {
@@ -183,14 +184,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
  
-  // Debug event times
-  const timesMatch = req.url.match(/^\/times\/(\d+)$/);
+  // Debug event times - try multiple endpoints
+  const timesMatch = req.url.match(/^[/]times[/](\d+)$/);
   if (timesMatch) {
     try {
       const eventId = timesMatch[1];
-      const r = await pcoFetch('/check-ins/v2/events/' + eventId + '/event_times?per_page=10&order=-starts_at');
+      const periodId = '45297297'; // May 3 period
+      const endpoints = {
+        event_times: await pcoFetch('/check-ins/v2/events/' + eventId + '/event_times?per_page=5'),
+        period_times: await pcoFetch('/check-ins/v2/event_periods/' + periodId + '/event_times?per_page=5'),
+        period_location_times: await pcoFetch('/check-ins/v2/event_periods/' + periodId + '/location_event_times?per_page=5'),
+        event: await pcoFetch('/check-ins/v2/events/' + eventId),
+      };
+      const result = {};
+      for (const [k, v] of Object.entries(endpoints)) {
+        result[k] = { status: v.status, count: v.data?.data?.length, keys: Object.keys(v.data || {}) };
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: r.status, data: r.data }));
+      res.end(JSON.stringify(result));
     } catch(err) {
       res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
     }
