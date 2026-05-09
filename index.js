@@ -166,6 +166,7 @@ async function getCheckInCounts(eventId) {
       date: mostRecentDate,
       service1: toCounts(first),
       service2: second.length > 0 ? toCounts(second) : null,
+      periodId: period.id,
     };
   }
  
@@ -180,6 +181,7 @@ async function getCheckInCounts(eventId) {
     date: todayStr,
     service1: toCounts(first),
     service2: second.length > 0 ? toCounts(second) : null,
+    periodId: period.id,
     periods: todayPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })),
   };
 }
@@ -196,6 +198,89 @@ const server = http.createServer(async (req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+ 
+  // GET /roster/:periodId/:locationId - get check-in roster for a room
+  const rosterMatch = req.url.match(/^\/roster\/(\d+)\/(\d+)$/);
+  if (rosterMatch) {
+    try {
+      const [, periodId, locationId] = rosterMatch;
+      let all = [];
+      let path = '/check-ins/v2/check_ins?where[event_period_id]=' + periodId +
+        '&where[location_id]=' + locationId +
+        '&include=person&per_page=100';
+      let pages = 0;
+      while (path && pages < 10) {
+        pages++;
+        const r = await pcoFetch(path);
+        if (r.status !== 200) break;
+        all = all.concat(r.data.data || []);
+        // Build person map from included
+        if (pages === 1) {
+          const included = r.data.included || [];
+          all._included = included;
+        }
+        const nextUrl = r.data.links?.next || null;
+        path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
+      }
+ 
+      // Map person data
+      const personMap = {};
+      for (const ci of all) {
+        const personId = ci.relationships?.person?.data?.id;
+        personMap[ci.id] = {
+          id: ci.id,
+          firstName: ci.attributes.first_name,
+          lastName: ci.attributes.last_name,
+          securityCode: ci.attributes.security_code,
+          medicalNotes: ci.attributes.medical_notes,
+          checkedOutAt: ci.attributes.checked_out_at,
+          createdAt: ci.attributes.created_at,
+          personId,
+        };
+      }
+ 
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(Object.values(personMap)));
+    } catch(err) {
+      res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+ 
+  // POST /checkout/:checkInId - check out a kid
+  const checkoutMatch = req.url.match(/^\/checkout\/(\d+)$/);
+  if (checkoutMatch && req.method === 'POST') {
+    try {
+      const checkInId = checkoutMatch[1];
+      const now = new Date().toISOString();
+      const r = await new Promise((resolve, reject) => {
+        const body = JSON.stringify({ data: { attributes: { checked_out_at: now } } });
+        const options = {
+          hostname: 'api.planningcenteronline.com',
+          path: '/check-ins/v2/check_ins/' + checkInId,
+          method: 'PATCH',
+          headers: {
+            'Authorization': auth,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+          }
+        };
+        const req2 = https.request(options, (res2) => {
+          let b = '';
+          res2.on('data', chunk => b += chunk);
+          res2.on('end', () => resolve({ status: res2.statusCode, data: JSON.parse(b) }));
+        });
+        req2.on('error', reject);
+        req2.write(body);
+        req2.end();
+      });
+      res.writeHead(r.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: r.status === 200, status: r.status }));
+    } catch(err) {
+      res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+    }
     return;
   }
  
@@ -245,3 +330,4 @@ const server = http.createServer(async (req, res) => {
 });
  
 server.listen(PORT, () => console.log('PCO proxy on port ' + PORT));
+ 
