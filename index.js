@@ -202,48 +202,70 @@ const server = http.createServer(async (req, res) => {
   }
  
   // GET /roster/:periodId/:locationId - get check-in roster for a room
-  const rosterMatch = req.url.match(/^\/roster\/(\d+)\/(\d+)$/);
+  const rosterMatch = req.url.match(/^[/]roster[/](\d+)[/](\d+)$/);
   if (rosterMatch) {
     try {
       const [, periodId, locationId] = rosterMatch;
+      // Get the period date for date filtering
+      const periodRes = await pcoFetch('/check-ins/v2/event_periods/' + periodId);
+      const periodDate = periodRes.data?.attributes?.starts_at?.split('T')[0] || '';
+      const dayStart = periodDate ? new Date(periodDate + 'T00:00:00Z') : null;
+      const dayEnd   = periodDate ? new Date(periodDate + 'T23:59:59Z') : null;
+ 
       let all = [];
       let path = '/check-ins/v2/check_ins?where[event_period_id]=' + periodId +
-        '&where[location_id]=' + locationId +
-        '&include=person&per_page=100';
+        '&include=locations&per_page=100';
       let pages = 0;
-      while (path && pages < 10) {
+ 
+      while (path && pages < 15) {
         pages++;
         const r = await pcoFetch(path);
         if (r.status !== 200) break;
-        all = all.concat(r.data.data || []);
-        // Build person map from included
-        if (pages === 1) {
-          const included = r.data.included || [];
-          all._included = included;
-        }
+        const pageData = r.data.data || [];
+ 
+        // Filter by date AND location
+        const filtered = pageData.filter(ci => {
+          // Date filter
+          if (dayStart && dayEnd) {
+            const created = new Date(ci.attributes.created_at);
+            if (created < dayStart || created > dayEnd) return false;
+          }
+          // Location filter - check relationships
+          const locIds = (ci.relationships?.locations?.data || []).map(l => l.id);
+          return locIds.includes(locationId);
+        });
+ 
+        all = all.concat(filtered);
+ 
+        // Stop if we're getting old check-ins
+        const wrongDate = pageData.filter(ci => {
+          if (!dayStart) return false;
+          const created = new Date(ci.attributes.created_at);
+          return created < dayStart;
+        });
+        if (wrongDate.length > pageData.length / 2) break;
+ 
         const nextUrl = r.data.links?.next || null;
         path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
       }
  
-      // Map person data
-      const personMap = {};
-      for (const ci of all) {
-        const personId = ci.relationships?.person?.data?.id;
-        personMap[ci.id] = {
-          id: ci.id,
-          firstName: ci.attributes.first_name,
-          lastName: ci.attributes.last_name,
-          securityCode: ci.attributes.security_code,
-          medicalNotes: ci.attributes.medical_notes,
-          checkedOutAt: ci.attributes.checked_out_at,
-          createdAt: ci.attributes.created_at,
-          personId,
-        };
-      }
+      console.log('Roster period:', periodId, 'location:', locationId, 'count:', all.length);
+ 
+      const kids = all.map(ci => ({
+        id: ci.id,
+        firstName: ci.attributes.first_name || '',
+        lastName:  ci.attributes.last_name  || '',
+        securityCode: ci.attributes.security_code || '',
+        medicalNotes: ci.attributes.medical_notes || null,
+        checkedOutAt: ci.attributes.checked_out_at || null,
+        createdAt:    ci.attributes.created_at || '',
+        personId:     ci.relationships?.person?.data?.id || null,
+      }));
  
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(Object.values(personMap)));
+      res.end(JSON.stringify(kids));
     } catch(err) {
+      console.error('Roster error:', err.message);
       res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
     }
     return;
