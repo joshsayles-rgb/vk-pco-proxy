@@ -138,6 +138,7 @@ async function getCheckInCounts(eventId) {
   console.log('Today periods:', todayPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })));
  
   if (todayPeriods.length === 0) {
+    console.log('ENTERING FALLBACK - no today periods found');
     // Fall back to most recent past periods (last Sunday)
     // Get the most recent Sunday's periods
     const pastPeriods = allPeriods
@@ -244,3 +245,4 @@ const server = http.createServer(async (req, res) => {
 });
  
 server.listen(PORT, () => console.log('PCO proxy on port ' + PORT));
+ 
