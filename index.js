@@ -45,7 +45,7 @@ function pcoFetch(path) {
 // Paginate all check-ins for a period and count by location
 // Split cutoff: 10:35 AM Pacific = 17:35 UTC
 const SERVICE_CUTOFF_HOUR = 17;
-const SERVICE_CUTOFF_MIN  = 40;
+const SERVICE_CUTOFF_MIN  = 45;
  
 function isFirstService(createdAt) {
   const d = new Date(createdAt);
@@ -245,4 +245,3 @@ const server = http.createServer(async (req, res) => {
 });
  
 server.listen(PORT, () => console.log('PCO proxy on port ' + PORT));
- 
