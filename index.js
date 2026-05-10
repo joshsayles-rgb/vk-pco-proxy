@@ -271,6 +271,78 @@ const server = http.createServer(async (req, res) => {
     return;
   }
  
+  // GET /search/:query - search PCO people by name
+  const searchMatch = req.url.match(/^\/search\/(.+)$/);
+  if (searchMatch && req.method === 'GET') {
+    try {
+      const query = decodeURIComponent(searchMatch[1]);
+      const r = await pcoFetch('/people/v2/people?where[search_name]=' + encodeURIComponent(query) + '&per_page=20');
+      const people = (r.data?.data || []).map(p => ({
+        id: p.id,
+        firstName: p.attributes.first_name || '',
+        lastName:  p.attributes.last_name  || '',
+        birthdate: p.attributes.birthdate  || '',
+        grade:     p.attributes.grade      || '',
+      }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(people));
+    } catch(err) {
+      res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+ 
+  // POST /checkin - check a person into a location
+  if (req.url === '/checkin' && req.method === 'POST') {
+    try {
+      const body = await new Promise((resolve, reject) => {
+        let data = '';
+        req.on('data', chunk => data += chunk);
+        req.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { reject(e); } });
+      });
+      const { personId, eventPeriodId, locationId, firstName, lastName } = body;
+      const securityCode = Math.random().toString(36).substring(2,6).toUpperCase();
+ 
+      const payload = {
+        data: {
+          type: 'CheckIn',
+          attributes: { first_name: firstName, last_name: lastName, security_code: securityCode },
+          relationships: {
+            person:       { data: { type: 'Person',      id: personId      } },
+            event_period: { data: { type: 'EventPeriod', id: eventPeriodId } },
+            locations:    { data: [{ type: 'Location',   id: locationId    }] },
+          }
+        }
+      };
+ 
+      const result = await new Promise((resolve, reject) => {
+        const bodyStr = JSON.stringify(payload);
+        const options = {
+          hostname: 'api.planningcenteronline.com',
+          path: '/check-ins/v2/check_ins',
+          method: 'POST',
+          headers: { 'Authorization': auth, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(bodyStr) }
+        };
+        const req2 = https.request(options, (res2) => {
+          let b = '';
+          res2.on('data', chunk => b += chunk);
+          res2.on('end', () => resolve({ status: res2.statusCode, data: JSON.parse(b) }));
+        });
+        req2.on('error', reject);
+        req2.write(bodyStr);
+        req2.end();
+      });
+ 
+      console.log('Check-in result:', result.status, JSON.stringify(result.data).substring(0, 200));
+      res.writeHead(result.status < 300 ? 200 : result.status, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: result.status < 300, status: result.status, securityCode, data: result.data?.errors }));
+    } catch(err) {
+      console.error('Check-in error:', err.message);
+      res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+ 
   // POST /checkout/:checkInId - check out a kid
   const checkoutMatch = req.url.match(/^\/checkout\/(\d+)$/);
   if (checkoutMatch && req.method === 'POST') {
@@ -352,4 +424,3 @@ const server = http.createServer(async (req, res) => {
 });
  
 server.listen(PORT, () => console.log('PCO proxy on port ' + PORT));
- 
