@@ -126,13 +126,18 @@ async function getCheckInCounts(eventId) {
   const todayStr = now.toISOString().split('T')[0];
   const allPeriods = periodsRes.data.data || [];
  
-  console.log('Today str:', todayStr, 'Now UTC:', now.toISOString());
-  console.log('All periods count:', allPeriods.length);
-  console.log('All periods:', JSON.stringify(allPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at }))));
+  // On Sunday Pacific time, use today's date; otherwise use UTC date
+  const pacificOffset = -7; // PDT
+  const pacificNow = new Date(now.getTime() + pacificOffset * 60 * 60 * 1000);
+  const pacificDay = pacificNow.getUTCDay(); // 0 = Sunday
+  const pacificDateStr = pacificNow.toISOString().split('T')[0];
+  const searchDate = pacificDay === 0 ? pacificDateStr : todayStr;
+ 
+  console.log('Today str:', todayStr, 'Pacific date:', pacificDateStr, 'Pacific day:', pacificDay);
  
   // Get today's periods sorted by start time
   const todayPeriods = allPeriods
-    .filter(p => p.attributes.starts_at.split('T')[0] === todayStr)
+    .filter(p => p.attributes.starts_at.split('T')[0] === searchDate)
     .sort((a, b) => new Date(a.attributes.starts_at) - new Date(b.attributes.starts_at));
  
   console.log('Today periods:', todayPeriods.map(p => ({ id: p.id, starts_at: p.attributes.starts_at })));
