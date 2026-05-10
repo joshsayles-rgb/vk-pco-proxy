@@ -308,6 +308,46 @@ const server = http.createServer(async (req, res) => {
     return;
   }
  
+  // GET /contacts/:personId - get parent contacts for a person
+  const contactsMatch = req.url.match(/^[/]contacts[/](\d+)$/);
+  if (contactsMatch && req.method === 'GET') {
+    try {
+      const personId = contactsMatch[1];
+      // Get household members for this person
+      const r = await pcoFetch('/people/v2/people/' + personId + '/households?include=people');
+      const households = r.data?.data || [];
+      const included = r.data?.included || [];
+ 
+      // Get phone numbers and emails for household members who are adults
+      const contacts = [];
+      for (const person of included) {
+        if (person.type !== 'Person') continue;
+        if (person.id === personId) continue; // skip the kid themselves
+        const name = (person.attributes.first_name || '') + ' ' + (person.attributes.last_name || '');
+        // Fetch their phone/email
+        const contactRes = await pcoFetch('/people/v2/people/' + person.id + '/phone_numbers');
+        const phones = (contactRes.data?.data || []).map(p => ({
+          number: p.attributes.number,
+          location: p.attributes.location,
+          primary: p.attributes.primary
+        }));
+        const emailRes = await pcoFetch('/people/v2/people/' + person.id + '/emails');
+        const emails = (emailRes.data?.data || []).map(e => ({
+          address: e.attributes.address,
+          primary: e.attributes.primary
+        }));
+        contacts.push({ id: person.id, name: name.trim(), phones, emails });
+      }
+ 
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(contacts));
+    } catch(err) {
+      console.error('Contacts error:', err.message);
+      res.writeHead(500); res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+ 
   // POST /checkin - check a person into a location
   if (req.url === '/checkin' && req.method === 'POST') {
     try {
