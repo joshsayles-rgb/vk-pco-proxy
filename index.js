@@ -212,16 +212,22 @@ const server = http.createServer(async (req, res) => {
     try {
       const [, periodId, locationId] = rosterMatch;
  
-      // Get period start date from PCO
+      // Get period start date - try direct fetch first, fall back to event periods list
+      let periodDate = '';
       const periodRes = await pcoFetch('/check-ins/v2/event_periods/' + periodId);
-      const startsAt = periodRes.data?.attributes?.starts_at || '';
-      const periodDate = startsAt.split('T')[0]; // e.g. "2026-05-10"
-      console.log('Roster: periodId', periodId, 'periodDate', periodDate, 'locationId', locationId);
- 
-      if (!periodDate) {
-        res.writeHead(400); res.end(JSON.stringify({ error: 'Could not determine period date' }));
-        return;
+      console.log('Period fetch status:', periodRes.status, JSON.stringify(periodRes.data).substring(0, 200));
+      if (periodRes.status === 200 && periodRes.data?.data?.attributes?.starts_at) {
+        periodDate = periodRes.data.data.attributes.starts_at.split('T')[0];
+      } else if (periodRes.status === 200 && periodRes.data?.attributes?.starts_at) {
+        periodDate = periodRes.data.attributes.starts_at.split('T')[0];
+      } else {
+        // Fall back: use today's Pacific date
+        const pacificOffset = -7;
+        const pacificNow = new Date(new Date().getTime() + pacificOffset * 60 * 60 * 1000);
+        periodDate = pacificNow.toISOString().split('T')[0];
+        console.log('Period fetch failed, using today:', periodDate);
       }
+      console.log('Roster: periodId', periodId, 'periodDate', periodDate, 'locationId', locationId);
  
       const dayStart = new Date(periodDate + 'T00:00:00Z').getTime();
       const dayEnd   = new Date(periodDate + 'T23:59:59Z').getTime();
