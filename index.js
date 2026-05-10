@@ -211,59 +211,64 @@ const server = http.createServer(async (req, res) => {
   if (rosterMatch) {
     try {
       const [, periodId, locationId] = rosterMatch;
-      // Get the period date for date filtering
+ 
+      // Get period start date from PCO
       const periodRes = await pcoFetch('/check-ins/v2/event_periods/' + periodId);
-      const periodDate = periodRes.data?.attributes?.starts_at?.split('T')[0] || '';
-      const dayStart = periodDate ? new Date(periodDate + 'T00:00:00Z') : null;
-      const dayEnd   = periodDate ? new Date(periodDate + 'T23:59:59Z') : null;
+      const startsAt = periodRes.data?.attributes?.starts_at || '';
+      const periodDate = startsAt.split('T')[0]; // e.g. "2026-05-10"
+      console.log('Roster: periodId', periodId, 'periodDate', periodDate, 'locationId', locationId);
+ 
+      if (!periodDate) {
+        res.writeHead(400); res.end(JSON.stringify({ error: 'Could not determine period date' }));
+        return;
+      }
+ 
+      const dayStart = new Date(periodDate + 'T00:00:00Z').getTime();
+      const dayEnd   = new Date(periodDate + 'T23:59:59Z').getTime();
  
       let all = [];
-      let path = '/check-ins/v2/check_ins?where[event_period_id]=' + periodId +
-        '&include=locations&per_page=100';
+      let path = '/check-ins/v2/check_ins?include=locations&per_page=100&order=-created_at';
       let pages = 0;
+      let doneEarly = false;
  
-      while (path && pages < 15) {
+      while (path && pages < 20 && !doneEarly) {
         pages++;
         const r = await pcoFetch(path);
         if (r.status !== 200) break;
         const pageData = r.data.data || [];
+        if (pageData.length === 0) break;
  
-        // Filter by date AND location
-        const filtered = pageData.filter(ci => {
-          // Date filter
-          if (dayStart && dayEnd) {
-            const created = new Date(ci.attributes.created_at);
-            if (created < dayStart || created > dayEnd) return false;
-          }
-          // Location filter - check relationships
+        for (const ci of pageData) {
+          const created = new Date(ci.attributes.created_at).getTime();
+ 
+          // Stop pagination once we go past today
+          if (created < dayStart) { doneEarly = true; break; }
+          // Skip if after today (shouldn't happen with order=-created_at but just in case)
+          if (created > dayEnd) continue;
+ 
+          // Location filter
           const locIds = (ci.relationships?.locations?.data || []).map(l => l.id);
-          return locIds.includes(locationId);
-        });
+          if (!locIds.includes(locationId)) continue;
  
-        all = all.concat(filtered);
+          all.push(ci);
+        }
  
-        // Stop if we're getting old check-ins
-        const wrongDate = pageData.filter(ci => {
-          if (!dayStart) return false;
-          const created = new Date(ci.attributes.created_at);
-          return created < dayStart;
-        });
-        if (wrongDate.length > pageData.length / 2) break;
- 
-        const nextUrl = r.data.links?.next || null;
-        path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
+        if (!doneEarly) {
+          const nextUrl = r.data.links?.next || null;
+          path = nextUrl ? new URL(nextUrl).pathname + new URL(nextUrl).search : null;
+        }
       }
  
-      console.log('Roster period:', periodId, 'location:', locationId, 'count:', all.length);
+      console.log('Roster result: periodId', periodId, 'location', locationId, 'count', all.length, 'pages', pages);
  
       const kids = all.map(ci => ({
-        id: ci.id,
-        firstName: ci.attributes.first_name || '',
-        lastName:  ci.attributes.last_name  || '',
+        id:           ci.id,
+        firstName:    ci.attributes.first_name    || '',
+        lastName:     ci.attributes.last_name     || '',
         securityCode: ci.attributes.security_code || '',
         medicalNotes: ci.attributes.medical_notes || null,
         checkedOutAt: ci.attributes.checked_out_at || null,
-        createdAt:    ci.attributes.created_at || '',
+        createdAt:    ci.attributes.created_at    || '',
         personId:     ci.relationships?.person?.data?.id || null,
       }));
  
